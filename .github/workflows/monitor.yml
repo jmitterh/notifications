@@ -1,0 +1,14 @@
+name: Selenium Contact Monitor
+on:
+  schedule:
+    - cron: '*/15 * * * *'  # Every 15 minutes
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions/setup-python@v2
+        with:
+          python-version: '3.12'
+      - run: pip install requests
+      - run: python selenium_contact_monitor.py

@@ -14,8 +14,9 @@ from selenium.webdriver.support import expected_conditions as EC
 import json
 import time
 import os
+import requests
 from datetime import datetime
-from items import EMAIL, PASSWORD, API_KEY, API_URL
+from items import EMAIL, PASSWORD, API_KEY, API_URL, DISCORD_WEBHOOK
 
 # Configuration
 CONFIG = {
@@ -31,7 +32,10 @@ CONFIG = {
     'NOTIFY_EMAIL': EMAIL,
     
     # API key
-    'API_KEY': API_KEY
+    'API_KEY': API_KEY,
+    
+    # Discord Webhook
+    'DISCORD_WEBHOOK': DISCORD_WEBHOOK
 }
 
 def setup_driver():
@@ -141,6 +145,29 @@ def save_message_count(count):
     except Exception as e:
         print(f"Error saving count: {e}")
 
+def send_discord_notification(new_messages):
+    """Send notification via Discord webhook"""
+    # try:
+    for msg in new_messages:
+        data = {
+            "content": "🔔 New contact form message!",
+            "embeds": [{
+                "title": "New Contact Message",
+                "color": 0x00ff00,
+                "fields": [
+                    {"name": "Name", "value": msg.get('name', 'Unknown'), "inline": True},
+                    {"name": "Email", "value": msg.get('email', 'Unknown'), "inline": True},
+                    {"name": "Message", "value": msg.get('message', '')[:200] + "...", "inline": False},
+                    {"name": "Time", "value": msg.get('timestamp', 'Unknown'), "inline": True}
+                ]
+            }]
+        }
+        response = requests.post(CONFIG['DISCORD_WEBHOOK'], json=data, timeout=10)
+        return response.status_code == 204
+    # except Exception as e:
+    #     print(f"Discord notification failed: {e}")
+    #     return False
+
 def send_email_notification(new_messages):
     """Send email notification"""
     # try:
@@ -200,6 +227,11 @@ def check_for_new_messages():
         if send_email_notification(new_messages):
             print(f"Sent notifications for {new_count} new messages")
             save_message_count(current_count)
+        else:
+            return False
+        
+        if send_discord_notification(new_messages):
+            print(f"Sent Discord notifications for {new_count} new messages")
         else:
             return False
     else:
