@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
 """
 Contact Form Monitor using Selenium to bypass WAF protection
-Requires: pip install selenium
-Also need to download ChromeDriver from https://chromedriver.chromium.org/
-Working script for its use case.
+Optimized for GitHub Actions CI environment
 """
 
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
@@ -15,8 +14,25 @@ import json
 import time
 import os
 import requests
+import sys
+import logging
 from datetime import datetime
-from items import EMAIL, PASSWORD, API_KEY, API_URL, DISCORD_WEBHOOK
+
+# Set up logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+# Import configuration
+try:
+    from items import EMAIL, PASSWORD, API_KEY, API_URL, DISCORD_WEBHOOK
+    logger.info("Successfully imported configuration")
+except ImportError as e:
+    logger.error(f"Failed to import configuration: {e}")
+    logger.error("Make sure items.py exists with all required variables")
+    sys.exit(1)
 
 # Configuration
 CONFIG = {
@@ -39,21 +55,60 @@ CONFIG = {
 }
 
 def setup_driver():
-    """Set up Chrome driver with options"""
+    """Set up Chrome driver with options optimized for CI"""
     chrome_options = Options()
-    chrome_options.add_argument('--headless')  # Run in background
+    
+    # Essential options for headless operation
+    chrome_options.add_argument('--headless=new')  # Use new headless mode
     chrome_options.add_argument('--no-sandbox')
     chrome_options.add_argument('--disable-dev-shm-usage')
     chrome_options.add_argument('--disable-gpu')
+    chrome_options.add_argument('--disable-software-rasterizer')
     chrome_options.add_argument('--window-size=1920,1080')
+    chrome_options.add_argument('--disable-extensions')
+    chrome_options.add_argument('--disable-plugins')
+    chrome_options.add_argument('--disable-images')
+    chrome_options.add_argument('--disable-javascript')  # We may not need JS for API endpoints
     chrome_options.add_argument('--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
     
+    # Additional options for CI environments
+    chrome_options.add_argument('--remote-debugging-port=9222')
+    chrome_options.add_argument('--disable-web-security')
+    chrome_options.add_argument('--allow-running-insecure-content')
+    chrome_options.add_argument('--disable-features=VizDisplayCompositor')
+    chrome_options.add_argument('--single-process')
+    
     try:
-        driver = webdriver.Chrome(options=chrome_options)
+        # Try to find ChromeDriver in common locations
+        possible_drivers = [
+            '/usr/bin/chromedriver',
+            '/usr/bin/chromium-chromedriver',
+            '/usr/local/bin/chromedriver',
+            'chromedriver'  # In PATH
+        ]
+        
+        driver_path = None
+        for path in possible_drivers:
+            if os.path.exists(path) or path == 'chromedriver':
+                driver_path = path
+                logger.info(f"Using ChromeDriver at: {driver_path}")
+                break
+        
+        if driver_path and driver_path != 'chromedriver':
+            service = Service(driver_path)
+            driver = webdriver.Chrome(service=service, options=chrome_options)
+        else:
+            # Let Selenium find the driver automatically
+            driver = webdriver.Chrome(options=chrome_options)
+        
+        # Set timeouts
+        driver.set_page_load_timeout(30)
+        driver.implicitly_wait(10)
+        
         return driver
     except Exception as e:
-        print(f"Error setting up Chrome driver: {e}")
-        print("Make sure ChromeDriver is installed and in your PATH")
+        logger.error(f"Error setting up Chrome driver: {e}")
+        logger.error("Make sure Chrome/Chromium and ChromeDriver are installed")
         return None
 
 def get_current_messages():
@@ -64,20 +119,21 @@ def get_current_messages():
     
     try:
         url = f"{CONFIG['API_URL']}?api_key={CONFIG['API_KEY']}"
-        print(f"Loading URL with Selenium: {url}")
+        logger.info(f"Loading URL: {CONFIG['API_URL']}")
         
         driver.get(url)
         
-        # Wait for JavaScript to execute and page to load
-        time.sleep(5)
+        # Wait for page to load
+        time.sleep(3)
         
-        # Wait for either JSON content or error message
-        try:
-            # Check if we got JSON response
-            page_text = driver.page_source
-            
-            # Look for JSON in the page
-            if page_text.startswith('{"') or '{"success"' in page_text:
+        # Get page source
+        page_text = driver.page_source
+        logger.info(f"Page loaded, content length: {len(page_text)}")
+        logger.debug(f"First 200 chars: {page_text[:200]}")
+        
+        # Look for JSON in the page
+        if page_text.startswith('{"') or '{"success"' in page_text:
+            try:
                 # Extract JSON from page source
                 start_idx = page_text.find('{"')
                 if start_idx != -1:
@@ -96,45 +152,56 @@ def get_current_messages():
                     
                     if end_idx > 0:
                         json_text = json_text[:end_idx]
+                        logger.debug(f"Extracted JSON: {json_text}")
                         data = json.loads(json_text)
                         
                         if data.get('success'):
                             messages = data.get('messages', [])
-                            print(f"Successfully fetched {len(messages)} messages")
+                            logger.info(f"Successfully fetched {len(messages)} messages")
                             return messages
                         else:
-                            print(f"API error: {data.get('error', 'Unknown')}")
+                            logger.error(f"API error: {data.get('error', 'Unknown')}")
                             return None
-            
-            # If no JSON found, check for error messages
-            if 'requires Javascript' in page_text:
-                print("Still blocked by JavaScript challenge")
+            except json.JSONDecodeError as e:
+                logger.error(f"JSON parsing failed: {e}")
                 return None
-            elif 'Unauthorized' in page_text:
-                print("API key authentication failed")
-                return None
-            else:
-                print("Unexpected page content:")
-                print(page_text[:500])
-                return None
-                
-        except json.JSONDecodeError as e:
-            print(f"JSON parsing failed: {e}")
-            print(f"Page content: {driver.page_source[:500]}")
+        
+        # Check for common error conditions
+        if 'requires Javascript' in page_text:
+            logger.warning("Still blocked by JavaScript challenge")
+            return None
+        elif 'Unauthorized' in page_text:
+            logger.error("API key authentication failed")
+            return None
+        elif 'aes.js' in page_text:
+            logger.warning("Encountered WAF challenge page")
+            return None
+        else:
+            logger.warning("Unexpected page content")
+            logger.debug(f"Page content: {page_text[:500]}")
             return None
     
     except Exception as e:
-        print(f"Selenium error: {e}")
+        logger.error(f"Selenium error: {e}")
         return None
     finally:
-        driver.quit()
+        try:
+            driver.quit()
+        except:
+            pass
 
 def get_last_message_count():
     """Get last known count"""
     try:
         with open(CONFIG['LAST_COUNT_FILE'], 'r') as f:
-            return int(f.read().strip())
-    except:
+            count = int(f.read().strip())
+            logger.info(f"Last known message count: {count}")
+            return count
+    except FileNotFoundError:
+        logger.info("No previous count file found, starting with 0")
+        return 0
+    except Exception as e:
+        logger.warning(f"Error reading count file: {e}, defaulting to 0")
         return 0
 
 def save_message_count(count):
@@ -142,51 +209,62 @@ def save_message_count(count):
     try:
         with open(CONFIG['LAST_COUNT_FILE'], 'w') as f:
             f.write(str(count))
+        logger.info(f"Saved message count: {count}")
     except Exception as e:
-        print(f"Error saving count: {e}")
+        logger.error(f"Error saving count: {e}")
 
 def send_discord_notification(new_messages):
     """Send notification via Discord webhook"""
-    # try:
-    for msg in new_messages:
-        data = {
-            "content": "🔔 New contact form message!",
-            "embeds": [{
-                "title": "New Contact Message",
-                "color": 0x00ff00,
-                "fields": [
-                    {"name": "Name", "value": msg.get('name', 'Unknown'), "inline": True},
-                    {"name": "Email", "value": msg.get('email', 'Unknown'), "inline": True},
-                    {"name": "Message", "value": msg.get('message', '')[:200] + "...", "inline": False},
-                    {"name": "Time", "value": msg.get('timestamp', 'Unknown'), "inline": True}
-                ]
-            }]
-        }
-        response = requests.post(CONFIG['DISCORD_WEBHOOK'], json=data, timeout=10)
-        return response.status_code == 204
-    # except Exception as e:
-    #     print(f"Discord notification failed: {e}")
-    #     return False
+    if not CONFIG['DISCORD_WEBHOOK']:
+        logger.info("No Discord webhook configured, skipping Discord notification")
+        return True
+    
+    try:
+        for msg in new_messages:
+            data = {
+                "content": "🔔 New contact form message!",
+                "embeds": [{
+                    "title": "New Contact Message",
+                    "color": 0x00ff00,
+                    "fields": [
+                        {"name": "Name", "value": msg.get('name', 'Unknown'), "inline": True},
+                        {"name": "Email", "value": msg.get('email', 'Unknown'), "inline": True},
+                        {"name": "Message", "value": msg.get('message', '')[:200] + ("..." if len(msg.get('message', '')) > 200 else ""), "inline": False},
+                        {"name": "Time", "value": msg.get('timestamp', 'Unknown'), "inline": True}
+                    ]
+                }]
+            }
+            response = requests.post(CONFIG['DISCORD_WEBHOOK'], json=data, timeout=10)
+            if response.status_code == 204:
+                logger.info("Discord notification sent successfully")
+            else:
+                logger.error(f"Discord notification failed with status: {response.status_code}")
+                return False
+        return True
+    except Exception as e:
+        logger.error(f"Discord notification failed: {e}")
+        return False
 
 def send_email_notification(new_messages):
     """Send email notification"""
-    # try:
-    import smtplib
-    from email.mime.text import MIMEText
-    from email.mime.multipart import MIMEMultipart
-    
-    server = smtplib.SMTP(CONFIG['SMTP_SERVER'], CONFIG['SMTP_PORT'])
-    server.starttls()
-    server.login(CONFIG['EMAIL_USER'], CONFIG['EMAIL_PASS'])
-    
-    for msg in new_messages:
-        email_msg = MIMEMultipart()
-        email_msg['From'] = CONFIG['EMAIL_USER']
-        email_msg['To'] = CONFIG['NOTIFY_EMAIL']
-        email_msg['Subject'] = f"RESUME WEBSITE: New Contact Message from {msg.get('name', 'Unknown')}"
+    try:
+        import smtplib
+        from email.mime.text import MIMEText
+        from email.mime.multipart import MIMEMultipart
         
-        body = f"""
-New contact form message:
+        logger.info("Connecting to email server...")
+        server = smtplib.SMTP(CONFIG['SMTP_SERVER'], CONFIG['SMTP_PORT'])
+        server.starttls()
+        server.login(CONFIG['EMAIL_USER'], CONFIG['EMAIL_PASS'])
+        
+        for msg in new_messages:
+            email_msg = MIMEMultipart()
+            email_msg['From'] = CONFIG['EMAIL_USER']
+            email_msg['To'] = CONFIG['NOTIFY_EMAIL']
+            email_msg['Subject'] = f"WEBSITE: New Contact Message from {msg.get('name', 'Unknown')}"
+            
+            body = f"""
+New contact form message received:
 
 Name: {msg.get('name', 'Unknown')}
 Email: {msg.get('email', 'Unknown')}
@@ -195,51 +273,67 @@ Time: {msg.get('timestamp', 'Unknown')}
 Message:
 {msg.get('message', '')}
 
-View admin panel: https://jpm.social-networking.me/admin.php
-        """
+---
+Automated notification from GitHub Actions
+            """
+            
+            email_msg.attach(MIMEText(body, 'plain'))
+            server.send_message(email_msg)
+            logger.info(f"Email sent for message from {msg.get('name', 'Unknown')}")
         
-        email_msg.attach(MIMEText(body, 'plain'))
-        server.send_message(email_msg)
-    
-    server.quit()
-    return True
-    # except Exception as e:
-        # print(f"Email failed: {e}")
-        # return False
+        server.quit()
+        return True
+    except Exception as e:
+        logger.error(f"Email notification failed: {e}")
+        return False
 
 def check_for_new_messages():
     """Main check function"""
-    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Checking messages...")
+    logger.info(f"Starting message check at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     
     current_messages = get_current_messages()
     if current_messages is None:
+        logger.error("Failed to fetch messages")
         return False
     
     current_count = len(current_messages)
     last_count = get_last_message_count()
     
-    print(f"Current: {current_count}, Last: {last_count}")
+    logger.info(f"Current messages: {current_count}, Last known: {last_count}")
     
     if current_count > last_count:
         new_count = current_count - last_count
         new_messages = current_messages[-new_count:]
         
-        if send_email_notification(new_messages):
-            print(f"Sent notifications for {new_count} new messages")
-            save_message_count(current_count)
-        else:
-            return False
+        logger.info(f"Found {new_count} new message(s)!")
         
-        if send_discord_notification(new_messages):
-            print(f"Sent Discord notifications for {new_count} new messages")
+        # Send notifications
+        email_success = send_email_notification(new_messages)
+        discord_success = send_discord_notification(new_messages)
+        
+        if email_success:
+            logger.info("Email notifications sent successfully")
+            save_message_count(current_count)
+            return True
         else:
+            logger.error("Email notification failed")
             return False
     else:
-        print("No new messages")
+        logger.info("No new messages found")
         save_message_count(current_count)
-    
-    return True
+        return True
 
 if __name__ == "__main__":
-    print("Contact Monitor (Selenium) starting...")
-    check_for_new_messages()
+    logger.info("Contact Monitor (Selenium) starting...")
+    
+    try:
+        success = check_for_new_messages()
+        if success:
+            logger.info("Monitor completed successfully")
+            sys.exit(0)
+        else:
+            logger.error("Monitor completed with errors")
+            sys.exit(1)
+    except Exception as e:
+        logger.error(f"Unexpected error: {e}")
+        sys.exit(1)

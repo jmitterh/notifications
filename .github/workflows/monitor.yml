@@ -1,14 +1,72 @@
-name: Selenium Contact Monitor
+name: Contact Form Monitor
+
 on:
   schedule:
     - cron: '*/15 * * * *'  # Every 15 minutes
+  workflow_dispatch:  # Allow manual triggering
+
 jobs:
   monitor:
     runs-on: ubuntu-latest
+    
     steps:
-      - uses: actions/checkout@v2
-      - uses: actions/setup-python@v2
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
         with:
           python-version: '3.12'
-      - run: pip install requests
-      - run: python selenium_contact_monitor.py
+      
+      - name: Cache pip dependencies
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+      
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      
+      - name: Install Chrome and ChromeDriver
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y chromium-browser chromium-chromedriver
+          
+      - name: Create items.py configuration
+        run: |
+          cat > items.py << EOF
+          EMAIL = "${{ secrets.EMAIL }}"
+          PASSWORD = "${{ secrets.EMAIL_PASSWORD }}"
+          API_KEY = "${{ secrets.API_KEY }}"
+          API_URL = "${{ secrets.API_URL }}"
+          ADMIN_URL = "${{ secrets.ADMIN_URL }}"
+          ADMIN_PASSWORD = "${{ secrets.ADMIN_PASSWORD }}"
+          DISCORD_WEBHOOK = "${{ secrets.DISCORD_WEBHOOK }}"
+          EOF
+      
+      - name: Set ChromeDriver path
+        run: |
+          export PATH=$PATH:/usr/bin
+          which chromium-chromedriver
+      
+      - name: Run contact monitor
+        run: |
+          export PATH=$PATH:/usr/bin
+          python selenium_contact_monitor.py
+        env:
+          # Ensure Chrome runs in headless mode in CI
+          DISPLAY: :99
+      
+      - name: Upload logs (if failed)
+        if: failure()
+        uses: actions/upload-artifact@v3
+        with:
+          name: monitor-logs
+          path: |
+            *.log
+            last_message_count.txt
+          retention-days: 7
