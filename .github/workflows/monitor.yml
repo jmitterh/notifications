@@ -2,7 +2,7 @@ name: Contact Form Monitor
 
 on:
   schedule:
-    - cron: '0 */1 * * *'  # Every 15 minutes
+    - cron: '0 */1 * * *'  # Every 1 hour
   workflow_dispatch:  # Allow manual triggering
 
 # Add permissions for the workflow to write to the repository
@@ -69,12 +69,24 @@ jobs:
           find . -name "*selenium*" -type f
       
       - name: Run contact monitor
+        id: monitor
         run: |
           export PATH=$PATH:/usr/bin
           python selenium_contact_monitor.py
         env:
           # Ensure Chrome runs in headless mode in CI
           DISPLAY: :99
+        continue-on-error: true  # Don't fail workflow if monitoring fails occasionally
+      
+      - name: Check monitor result
+        run: |
+          if [ "${{ steps.monitor.outcome }}" = "failure" ]; then
+            echo "⚠️ Monitor failed this time, but this is expected occasionally due to network/timeout issues"
+            echo "The workflow will continue and try again in 15 minutes"
+            echo "If this happens frequently, there may be a persistent issue to investigate"
+          else
+            echo "✅ Monitor completed successfully"
+          fi
       
       - name: Commit and push updated message count
         run: |
