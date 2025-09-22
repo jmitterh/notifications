@@ -79,21 +79,45 @@ def setup_driver():
     chrome_options.add_argument('--single-process')
     
     try:
-        # Try to find ChromeDriver in common locations
+        # Try to find ChromeDriver in common locations for Ubuntu
         possible_drivers = [
             '/usr/bin/chromedriver',
             '/usr/bin/chromium-chromedriver',
             '/usr/local/bin/chromedriver',
+            '/snap/bin/chromium.chromedriver',
             'chromedriver'  # In PATH
         ]
         
+        # Also try to find Chrome/Chromium binary
+        possible_chrome = [
+            '/usr/bin/chromium-browser',
+            '/usr/bin/chromium',
+            '/usr/bin/google-chrome',
+            '/snap/bin/chromium'
+        ]
+        
         driver_path = None
+        chrome_binary = None
+        
+        # Find ChromeDriver
         for path in possible_drivers:
-            if os.path.exists(path) or path == 'chromedriver':
+            if os.path.exists(path):
                 driver_path = path
-                logger.info(f"Using ChromeDriver at: {driver_path}")
+                logger.info(f"Found ChromeDriver at: {driver_path}")
                 break
         
+        # Find Chrome binary
+        for path in possible_chrome:
+            if os.path.exists(path):
+                chrome_binary = path
+                logger.info(f"Found Chrome binary at: {chrome_binary}")
+                break
+        
+        # Set Chrome binary location if found
+        if chrome_binary:
+            chrome_options.binary_location = chrome_binary
+        
+        # Create driver
         if driver_path and driver_path != 'chromedriver':
             service = Service(driver_path)
             driver = webdriver.Chrome(service=service, options=chrome_options)

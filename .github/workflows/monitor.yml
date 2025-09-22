@@ -36,6 +36,12 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y chromium-browser chromium-chromedriver
           
+      - name: Verify Chrome installation
+        run: |
+          chromium-browser --version || google-chrome --version || chromium --version
+          ls -la /usr/bin/*chrome* || true
+          ls -la /usr/bin/*driver* || true
+          
       - name: Create items.py configuration
         run: |
           cat > items.py << EOF
@@ -47,11 +53,6 @@ jobs:
           ADMIN_PASSWORD = "${{ secrets.ADMIN_PASSWORD }}"
           DISCORD_WEBHOOK = "${{ secrets.DISCORD_WEBHOOK }}"
           EOF
-      
-      - name: Set ChromeDriver path
-        run: |
-          export PATH=$PATH:/usr/bin
-          which chromium-chromedriver
       
       - name: Run contact monitor
         run: |
