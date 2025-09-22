@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Contact Form Monitor using Selenium to bypass WAF protection
-Optimized for GitHub Actions CI environment
+Cross-platform version (Windows + Linux CI)
 """
 
 from selenium import webdriver
@@ -16,6 +16,7 @@ import os
 import requests
 import sys
 import logging
+import platform
 from datetime import datetime
 
 # Set up logging
@@ -54,85 +55,127 @@ CONFIG = {
     'DISCORD_WEBHOOK': DISCORD_WEBHOOK
 }
 
+def is_ci_environment():
+    """Check if running in CI environment"""
+    return os.getenv('GITHUB_ACTIONS') == 'true' or os.getenv('CI') == 'true'
+
 def setup_driver():
-    """Set up Chrome driver with options optimized for CI"""
+    """Set up Chrome driver with options optimized for both Windows and CI"""
     chrome_options = Options()
     
-    # Essential options for headless operation
+    # Universal options that work on both platforms
     chrome_options.add_argument('--headless=new')  # Use new headless mode
     chrome_options.add_argument('--no-sandbox')
     chrome_options.add_argument('--disable-dev-shm-usage')
     chrome_options.add_argument('--disable-gpu')
-    chrome_options.add_argument('--disable-software-rasterizer')
     chrome_options.add_argument('--window-size=1920,1080')
     chrome_options.add_argument('--disable-extensions')
     chrome_options.add_argument('--disable-plugins')
-    chrome_options.add_argument('--disable-images')
-    chrome_options.add_argument('--disable-javascript')  # We may not need JS for API endpoints
+    chrome_options.add_argument('--disable-images')  # Speed up loading
     chrome_options.add_argument('--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
     
-    # Additional options for CI environments
-    chrome_options.add_argument('--remote-debugging-port=9222')
-    chrome_options.add_argument('--disable-web-security')
-    chrome_options.add_argument('--allow-running-insecure-content')
-    chrome_options.add_argument('--disable-features=VizDisplayCompositor')
-    chrome_options.add_argument('--single-process')
+    # CI-specific options (these can cause issues on Windows)
+    if is_ci_environment():
+        chrome_options.add_argument('--disable-software-rasterizer')
+        chrome_options.add_argument('--remote-debugging-port=9222')
+        chrome_options.add_argument('--disable-web-security')
+        chrome_options.add_argument('--allow-running-insecure-content')
+        chrome_options.add_argument('--disable-features=VizDisplayCompositor')
+        chrome_options.add_argument('--single-process')  # Only in CI
+        logger.info("Running in CI environment, using CI-specific Chrome options")
+    else:
+        # Local development options (more stable on Windows)
+        chrome_options.add_argument('--disable-logging')
+        chrome_options.add_argument('--disable-gpu-logging')
+        chrome_options.add_argument('--log-level=3')  # Suppress console logs
+        logger.info("Running locally, using local development Chrome options")
     
     try:
-        # Try to find ChromeDriver in common locations for Ubuntu
-        possible_drivers = [
-            '/usr/bin/chromedriver',
-            '/usr/bin/chromium-chromedriver',
-            '/usr/local/bin/chromedriver',
-            '/snap/bin/chromium.chromedriver',
-            'chromedriver'  # In PATH
-        ]
+        system = platform.system().lower()
+        logger.info(f"Detected operating system: {system}")
         
-        # Also try to find Chrome/Chromium binary
-        possible_chrome = [
-            '/usr/bin/chromium-browser',
-            '/usr/bin/chromium',
-            '/usr/bin/google-chrome',
-            '/snap/bin/chromium'
-        ]
+        if system == 'windows':
+            # Windows-specific setup
+            possible_drivers = [
+                'chromedriver.exe',  # In PATH or current directory
+                r'C:\chromedriver\chromedriver.exe',
+                r'C:\Program Files\chromedriver\chromedriver.exe',
+            ]
+            
+            driver_path = None
+            for path in possible_drivers:
+                if os.path.exists(path) or path == 'chromedriver.exe':
+                    driver_path = path
+                    logger.info(f"Found ChromeDriver at: {driver_path}")
+                    break
+            
+            if driver_path and driver_path != 'chromedriver.exe':
+                service = Service(driver_path)
+                driver = webdriver.Chrome(service=service, options=chrome_options)
+            else:
+                driver = webdriver.Chrome(options=chrome_options)
         
-        driver_path = None
-        chrome_binary = None
-        
-        # Find ChromeDriver
-        for path in possible_drivers:
-            if os.path.exists(path):
-                driver_path = path
-                logger.info(f"Found ChromeDriver at: {driver_path}")
-                break
-        
-        # Find Chrome binary
-        for path in possible_chrome:
-            if os.path.exists(path):
-                chrome_binary = path
-                logger.info(f"Found Chrome binary at: {chrome_binary}")
-                break
-        
-        # Set Chrome binary location if found
-        if chrome_binary:
-            chrome_options.binary_location = chrome_binary
-        
-        # Create driver
-        if driver_path and driver_path != 'chromedriver':
-            service = Service(driver_path)
-            driver = webdriver.Chrome(service=service, options=chrome_options)
         else:
-            # Let Selenium find the driver automatically
-            driver = webdriver.Chrome(options=chrome_options)
+            # Linux/Unix setup (for CI)
+            possible_drivers = [
+                '/usr/bin/chromedriver',
+                '/usr/bin/chromium-chromedriver',
+                '/usr/local/bin/chromedriver',
+                '/snap/bin/chromium.chromedriver',
+                'chromedriver'
+            ]
+            
+            possible_chrome = [
+                '/usr/bin/chromium-browser',
+                '/usr/bin/chromium',
+                '/usr/bin/google-chrome',
+                '/snap/bin/chromium'
+            ]
+            
+            driver_path = None
+            chrome_binary = None
+            
+            # Find ChromeDriver
+            for path in possible_drivers:
+                if os.path.exists(path):
+                    driver_path = path
+                    logger.info(f"Found ChromeDriver at: {driver_path}")
+                    break
+            
+            # Find Chrome binary
+            for path in possible_chrome:
+                if os.path.exists(path):
+                    chrome_binary = path
+                    logger.info(f"Found Chrome binary at: {chrome_binary}")
+                    break
+            
+            # Set Chrome binary location if found
+            if chrome_binary:
+                chrome_options.binary_location = chrome_binary
+            
+            # Create driver
+            if driver_path and driver_path != 'chromedriver':
+                service = Service(driver_path)
+                driver = webdriver.Chrome(service=service, options=chrome_options)
+            else:
+                driver = webdriver.Chrome(options=chrome_options)
         
         # Set timeouts
         driver.set_page_load_timeout(30)
         driver.implicitly_wait(10)
         
+        logger.info("ChromeDriver started successfully")
         return driver
+        
     except Exception as e:
         logger.error(f"Error setting up Chrome driver: {e}")
         logger.error("Make sure Chrome/Chromium and ChromeDriver are installed")
+        
+        # Additional troubleshooting info
+        if system == 'windows':
+            logger.error("For Windows: Download ChromeDriver from https://chromedriver.chromium.org/")
+            logger.error("Make sure ChromeDriver version matches your Chrome version")
+        
         return None
 
 def get_current_messages():
@@ -148,7 +191,7 @@ def get_current_messages():
         driver.get(url)
         
         # Wait for page to load
-        time.sleep(3)
+        time.sleep(5)
         
         # Get page source
         page_text = driver.page_source
@@ -211,6 +254,7 @@ def get_current_messages():
     finally:
         try:
             driver.quit()
+            logger.info("ChromeDriver closed")
         except:
             pass
 
@@ -298,7 +342,7 @@ Message:
 {msg.get('message', '')}
 
 ---
-Automated notification from GitHub Actions
+Automated notification from contact monitor
             """
             
             email_msg.attach(MIMEText(body, 'plain'))
