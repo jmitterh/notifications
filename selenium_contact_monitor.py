@@ -321,9 +321,22 @@ def send_email_notification(new_messages):
         from email.mime.multipart import MIMEMultipart
         
         logger.info("Connecting to email server...")
+        logger.info(f"Email user: {CONFIG['EMAIL_USER']}")
+        logger.info(f"SMTP server: {CONFIG['SMTP_SERVER']}:{CONFIG['SMTP_PORT']}")
+        
         server = smtplib.SMTP(CONFIG['SMTP_SERVER'], CONFIG['SMTP_PORT'])
         server.starttls()
-        server.login(CONFIG['EMAIL_USER'], CONFIG['EMAIL_PASS'])
+        
+        # Try to login
+        try:
+            server.login(CONFIG['EMAIL_USER'], CONFIG['EMAIL_PASS'])
+            logger.info("Gmail authentication successful")
+        except smtplib.SMTPAuthenticationError as auth_error:
+            logger.error(f"Gmail authentication failed: {auth_error}")
+            logger.error("Make sure you're using a Gmail App Password, not your regular password")
+            logger.error("App Password should be 16 characters like 'abcd efgh ijkl mnop'")
+            server.quit()
+            return False
         
         for msg in new_messages:
             email_msg = MIMEMultipart()
@@ -375,16 +388,23 @@ def check_for_new_messages():
         
         logger.info(f"Found {new_count} new message(s)!")
         
-        # Send notifications
+        # Send notifications - try both, don't fail if one fails
         email_success = send_email_notification(new_messages)
         discord_success = send_discord_notification(new_messages)
         
-        if email_success:
-            logger.info("Email notifications sent successfully")
+        # Success if at least one notification method worked
+        if email_success or discord_success:
+            if email_success and discord_success:
+                logger.info("Both email and Discord notifications sent successfully")
+            elif email_success:
+                logger.info("Email notification sent successfully (Discord skipped or failed)")
+            elif discord_success:
+                logger.info("Discord notification sent successfully (Email failed)")
+            
             save_message_count(current_count)
             return True
         else:
-            logger.error("Email notification failed")
+            logger.error("All notification methods failed")
             return False
     else:
         logger.info("No new messages found")
