@@ -5,6 +5,10 @@ on:
     - cron: '*/15 * * * *'  # Every 15 minutes
   workflow_dispatch:  # Allow manual triggering
 
+# Add permissions for the workflow to write to the repository
+permissions:
+  contents: write  # Allow pushing changes back to repo
+
 jobs:
   monitor:
     runs-on: ubuntu-latest
@@ -71,6 +75,23 @@ jobs:
         env:
           # Ensure Chrome runs in headless mode in CI
           DISPLAY: :99
+      
+      - name: Commit and push updated message count
+        run: |
+          # Configure git
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          
+          # Check if last_message_count.txt has changes
+          if git diff --quiet last_message_count.txt; then
+            echo "No changes to message count file"
+          else
+            echo "Message count file updated, committing changes"
+            git add last_message_count.txt
+            git commit -m "Update message count from automated monitor [skip ci]"
+            git push
+          fi
+        continue-on-error: true  # Don't fail the workflow if git operations fail
       
       - name: Upload logs (if failed)
         if: failure()
